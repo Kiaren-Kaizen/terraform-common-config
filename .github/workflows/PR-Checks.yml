@@ -2,7 +2,10 @@ name: Post-PR-Formater
 
 on:
   pull_request:
-  push:
+    types:
+      - opened
+      - edited
+      - synchronize
 
 jobs:
   Terraform-fmt:
