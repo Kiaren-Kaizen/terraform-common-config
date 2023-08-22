@@ -28,5 +28,4 @@ jobs:
         file_pattern: environments/* components/* modules/*
 
     - uses: pre-commit/action@v3.0.0
-      with: 
-      
+    
