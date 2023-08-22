@@ -23,16 +23,16 @@ output "resource_with_pub_and_pri_ips" {
   description = ""
   value = {
     dev = {
-      public =  local.dev_net.resource_with_pub_and_pri_ips.public
-      private =  local.dev_net.resource_with_pub_and_pri_ips.private
+      public  = local.dev_net.resource_with_pub_and_pri_ips.public
+      private = local.dev_net.resource_with_pub_and_pri_ips.private
     }
     pre = {
-      public =  local.pre_net.resource_with_pub_and_pri_ips.public
-      private =  local.pre_net.resource_with_pub_and_pri_ips.private
+      public  = local.pre_net.resource_with_pub_and_pri_ips.public
+      private = local.pre_net.resource_with_pub_and_pri_ips.private
     }
     prd = {
-      public =  local.prd_net.resource_with_pub_and_pri_ips.public
-      private =  local.prd_net.resource_with_pub_and_pri_ips.private
+      public    = local.prd_net.resource_with_pub_and_pri_ips.public
+      private = local.prd_net.resource_with_pub_and_pri_ips.private
     }
   }
 }

@@ -27,8 +27,8 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v4
         with:
           file_pattern: environments/* components/* modules/*
-      - name: 2st Pre Commit
-        uses: pre-commit/action@v3.0.0
+      # - name: 2st Pre Commit
+      #   uses: pre-commit/action@v3.0.0
   Linter:
     runs-on: ubuntu-latest
     permissions:
