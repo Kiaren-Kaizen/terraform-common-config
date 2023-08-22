@@ -14,21 +14,21 @@ jobs:
       contents: write
 
     steps:
-    - name: CheckOut
-    - uses: actions/checkout@v3
-      with:
-        ref: ${{ github.head_ref }}
-    - name: 1st Pre Commit
-    - uses: pre-commit/action@v3.0.0
-      with: 
-        extra_args: terraform_fmt --all-files
-      continue-on-error: true
-    - name: Auto Commit
-    - uses: stefanzweifel/git-auto-commit-action@v4
-      with:
-        file_pattern: environments/* components/* modules/*
-    - name: 2st Pre Commit
-    - uses: pre-commit/action@v3.0.0
+      - name: CheckOut
+      - uses: actions/checkout@v3
+        with:
+          ref: ${{ github.head_ref }}
+      - name: 1st Pre Commit
+      - uses: pre-commit/action@v3.0.0
+        with: 
+          extra_args: terraform_fmt --all-files
+        continue-on-error: true
+      - name: Auto Commit
+      - uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          file_pattern: environments/* components/* modules/*
+      - name: 2st Pre Commit
+      - uses: pre-commit/action@v3.0.0
   Linter:
     runs-on: ubuntu-latest
     permissions:
@@ -37,14 +37,13 @@ jobs:
       statuses: write
     
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v3
-      with:
-        fetch-depth: 0
-
-    - name: Lint Code Base
-      uses: super-linter/super-linter@v5
-      env:
-        VALIDATE_ALL_CODEBASE: false
-        DEFAULT_BRANCH: main
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout Code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: Lint Code Base
+        uses: super-linter/super-linter@v5
+        env:
+          VALIDATE_ALL_CODEBASE: false
+          DEFAULT_BRANCH: main
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
