@@ -8,7 +8,7 @@ output "region" {
   }
 }
 
-# A Simple output of the tenant id depending on what environment is passed through
+# A Simple output of a tenant id depending on what environment is passed through
 output "tenant_id" {
   description = "IDS"
   value = {
