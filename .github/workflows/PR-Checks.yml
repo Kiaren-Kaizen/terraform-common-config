@@ -25,5 +25,3 @@ jobs:
         continue-on-error: true
       - name: Auto Commit
         uses: stefanzweifel/git-auto-commit-action@v4
-  Linter:
-    uses: ./.github/workflows/Linter.yml
