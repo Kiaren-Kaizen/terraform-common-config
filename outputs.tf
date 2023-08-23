@@ -31,7 +31,7 @@ output "resource_with_pub_and_pri_ips" {
       private = local.pre_net.resource_with_pub_and_pri_ips.private
     }
     prd = {
-      public     = local.prd_net.resource_with_pub_and_pri_ips.public
+      public  = local.prd_net.resource_with_pub_and_pri_ips.public
       private = local.prd_net.resource_with_pub_and_pri_ips.private
     }
   }
