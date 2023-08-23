@@ -21,7 +21,9 @@ jobs:
       - name: 1st Pre Commit
         uses: pre-commit/action@v3.0.0
         with: 
-          extra_args: terraform_fmt --all-files
+          extra_args: 
+            - terraform_fmt --all-files
+            - end-of-file-fixer
         continue-on-error: true
       - name: Auto Commit
         uses: stefanzweifel/git-auto-commit-action@v4
