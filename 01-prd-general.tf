@@ -1,5 +1,5 @@
 locals {
-  dev_general = {
+  prd_general = {
     region = "uksouth"
   }
 }
