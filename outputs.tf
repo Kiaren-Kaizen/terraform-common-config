@@ -14,9 +14,9 @@ output "region" {
 output "tenant_id" {
   description = "IDS"
   value = {
-    dev = local.dev_ids.region
-    pre = local.pre_ids.region
-    prd = local.prd_ids.region
+    dev = local.dev_ids.tenant_id
+    pre = local.pre_ids.tenant_id
+    prd = local.prd_ids.tenant_id
   }
 }
 
