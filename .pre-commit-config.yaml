@@ -3,9 +3,13 @@ repos:
       rev: v4.4.0
       hooks:
           - id: trailing-whitespace
+            exclude: ^.github
           - id: end-of-file-fixer
+            exclude: ^.github
           - id: check-yaml
+            exclude: ^.github
           - id: check-added-large-files
+            exclude: ^.github
     - repo: https://github.com/antonbabenko/pre-commit-terraform
       rev: v1.77.1
       hooks:
