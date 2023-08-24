@@ -1,4 +1,4 @@
-#Below is a example block of the module that is specific to  
+#Below is a example block of the module that is specific to
 output "region" {
 
   description = "GENERAL"
