@@ -18,10 +18,10 @@ jobs:
         uses: actions/checkout@v3
         with:
           ref: ${{ github.head_ref }}
-      - name: Pre Commit 
+      - name: Pre Commit - Terraform
         uses: pre-commit/action@v3.0.0
         with: 
-          extra_args: terraform_fmt --all-files
+          test: terraform_fmt --all-files
         continue-on-error: true
       - name: Auto Commit
         uses: stefanzweifel/git-auto-commit-action@v4
