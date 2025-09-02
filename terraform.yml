@@ -1,0 +1,233 @@
+# Plan on every build (push + PR). Apply only on main.
+trigger:
+  branches:
+    include:
+      - '*'
+  tags:
+    include:
+      - '*'
+
+pr:
+  branches:
+    include:
+      - '*'
+
+name: MASTER-$(Date:yyyyMMdd)$(Rev:.r)
+
+# —— Parameters you can tweak ——
+parameters:
+- name: serviceConnection
+  type: string
+  default: 'sc-azurerm-prod-oidc'     # AzureRM service connection (OIDC)
+
+- name: terraformVersion
+  type: string
+  default: '1.8.5'
+
+- name: workingDir
+  type: string
+  default: 'Policy'                   # repo root for TF code (adjust if different)
+
+- name: planFile
+  type: string
+  default: 'plan-$(Build.BuildId).out'
+
+# Environments (plan for all, apply only for those you choose)
+- name: environmentObjects
+  type: object
+  default:
+    - environmentName: 'dev'
+      tfvars: 'vars/policy_dev.tfvars'
+      adoEnvironment: ''              # no approvals needed for dev applies (we're not applying dev here)
+      apply: false
+    - environmentName: 'prd'
+      tfvars: 'vars/prod.tfvars'
+      adoEnvironment: 'prod-env'      # <-- Configure approvals here in ADO (single gate)
+      apply: true
+
+# ---------------- Stages ----------------
+# 1) PLAN — run on every build for all envs (produces tfplan artifact + plan.txt)
+- template: ./.azure-pipelines/stages/terraform_build.yml
+  parameters:
+    serviceConnection:  ${{ parameters.serviceConnection }}
+    terraformVersion:   ${{ parameters.terraformVersion }}
+    workingDir:         ${{ parameters.workingDir }}
+    planFile:           ${{ parameters.planFile }}
+    environmentObjects: ${{ parameters.environmentObjects }}
+
+# 2) APPLY — only when branch == main, per-env job; each job:
+#    - is a deployment job targeting its ADO Environment (single approval gate)
+#    - runs only if its matching PLAN reported changes
+- ${{ if eq(variables['Build.SourceBranch'], 'refs/heads/main') }}:
+  - template: ./.azure-pipelines/stages/terraform_apply.yml
+    parameters:
+      serviceConnection:  ${{ parameters.serviceConnection }}
+      terraformVersion:   ${{ parameters.terraformVersion }}
+      workingDir:         ${{ parameters.workingDir }}
+      planFile:           ${{ parameters.planFile }}
+      environmentObjects: ${{ parameters.environmentObjects }}
+
+
+
+
+
+
+
+
+
+
+
+# terraform_build.yml
+parameters:
+  serviceConnection: ''
+  terraformVersion: '1.8.5'
+  workingDir: ''
+  planFile: 'plan-$(Build.BuildId).out'
+  environmentObjects: []   # [{ environmentName, tfvars, adoEnvironment, apply }]
+
+stages:
+- stage: Plan
+  displayName: "Terraform PLAN"
+  jobs:
+  # Create one plan job per environment
+  - ${{ each envobj in parameters.environmentObjects }}:
+    - job: plan_${{ envobj.environmentName }}
+      displayName: "Plan – ${{ envobj.environmentName }}"
+      pool: { vmImage: 'ubuntu-latest' }
+      variables:
+        TF_ENV_NAME: '${{ envobj.environmentName }}'
+        TF_VARS:     '${{ envobj.tfvars }}'
+      steps:
+      - task: TerraformInstaller@1
+        displayName: "Install Terraform ${{ parameters.terraformVersion }}"
+        inputs:
+          terraformVersion: ${{ parameters.terraformVersion }}
+
+      - task: TerraformCLI@1
+        displayName: "terraform init"
+        inputs:
+          command: 'init'
+          workingDirectory: ${{ parameters.workingDir }}
+
+      # Produce a binary plan AND a readable plan.txt
+      - task: TerraformCLI@1
+        name: tfplan
+        displayName: "terraform plan (binary) – ${{ envobj.environmentName }}"
+        inputs:
+          command: 'plan'
+          workingDirectory: ${{ parameters.workingDir }}
+          environmentServiceNameAzureRM: ${{ parameters.serviceConnection }}
+          commandOptions: >
+            -input=false
+            -lock-timeout=300s
+            -var-file="$(Build.SourcesDirectory)/${{ envobj.tfvars }}"
+            -out "${{ parameters.planFile }}"
+            -detailed-exitcode
+
+      - task: Bash@3
+        displayName: "terraform show (readable)"
+        inputs:
+          targetType: inline
+          script: |
+            set -euo pipefail
+            cd "${{ parameters.workingDir }}"
+            terraform show -no-color "${{ parameters.planFile }}" > "plan.${TF_ENV_NAME}.txt"
+
+      # Publish artifacts for review (per env)
+      - publish: '${{ parameters.workingDir }}/${{ parameters.planFile }}'
+        artifact: tfplan-${{ envobj.environmentName }}
+        displayName: "Publish plan (binary) – ${{ envobj.environmentName }}"
+
+      - publish: '${{ parameters.workingDir }}/plan.${{ envobj.environmentName }}.txt'
+        artifact: tfplan-${{ envobj.environmentName }}
+        displayName: "Publish plan (readable) – ${{ envobj.environmentName }}"
+
+      # Decide if there are changes; expose as stage output variable
+      - task: Bash@3
+        name: setHasChanges
+        displayName: "Detect changes for ${{ envobj.environmentName }}"
+        inputs:
+          targetType: inline
+          script: |
+            set -euo pipefail
+            if grep -q "No changes." "${{ parameters.workingDir }}/plan.${TF_ENV_NAME}.txt"; then
+              echo "No changes for ${TF_ENV_NAME}"
+              echo "##vso[task.setvariable variable=TF_HAS_CHANGES;isOutput=true]false"
+            else
+              echo "Changes detected for ${TF_ENV_NAME}"
+              echo "##vso[task.setvariable variable=TF_HAS_CHANGES;isOutput=true]true"
+            fi
+
+
+
+
+
+
+
+
+
+
+
+
+# terraform_apply.yml
+parameters:
+  serviceConnection: ''
+  terraformVersion: '1.8.5'
+  workingDir: ''
+  planFile: 'plan-$(Build.BuildId).out'
+  environmentObjects: []   # [{ environmentName, tfvars, adoEnvironment, apply }]
+
+stages:
+- stage: Apply
+  displayName: "Terraform APPLY"
+  dependsOn: Plan
+  jobs:
+  - ${{ each envobj in parameters.environmentObjects }}:
+    - ${{ if eq(envobj.apply, true) }}:
+      - deployment: apply_${{ envobj.environmentName }}
+        displayName: "Apply – ${{ envobj.environmentName }}"
+        environment: '${{ envobj.adoEnvironment }}'   # <-- single approval gate here
+        # Skip this env if its plan had no changes
+        condition: >
+          and(
+            succeeded(),
+            eq(dependencies.Plan.outputs['plan_${{ envobj.environmentName }}.setHasChanges.TF_HAS_CHANGES'], 'true')
+          )
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+              - task: TerraformInstaller@1
+                displayName: "Install Terraform ${{ parameters.terraformVersion }}"
+                inputs:
+                  terraformVersion: ${{ parameters.terraformVersion }}
+
+              # Get the exact plan generated by the Plan stage for this env
+              - task: DownloadPipelineArtifact@2
+                displayName: "Download plan artifact – ${{ envobj.environmentName }}"
+                inputs:
+                  buildType: 'current'
+                  artifactName: 'tfplan-${{ envobj.environmentName }}'
+                  targetPath: '$(Pipeline.Workspace)/tfplan-${{ envobj.environmentName }}'
+
+              - task: TerraformCLI@1
+                displayName: "terraform init"
+                inputs:
+                  command: 'init'
+                  workingDirectory: ${{ parameters.workingDir }}
+
+              # Immutable apply of the saved plan
+              - task: TerraformCLI@1
+                displayName: "terraform apply (immutable) – ${{ envobj.environmentName }}"
+                inputs:
+                  command: 'apply'
+                  workingDirectory: ${{ parameters.workingDir }}
+                  environmentServiceNameAzureRM: ${{ parameters.serviceConnection }}
+                  commandOptions: >
+                    -input=false -lock-timeout=300s -auto-approve
+                    "$(Pipeline.Workspace)/tfplan-${{ envobj.environmentName }}/${{ parameters.planFile }}"
+
+
+
+
+
