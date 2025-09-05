@@ -233,32 +233,29 @@ stages:
 
 
 
-# Terraform Module – PR Lint & Test (required gate)
-# Runs on every commit to any PR; fails PR if checks fail
+# Terraform Module – PR Lint & Test (Required Gate)
+# Uses Microsoft-published tasks where available (Terraform, Python, Cache).
+# Safe for modules: no remote backends, no plan/apply.
 
 name: $(Date:yyyyMMdd).$(Rev:r)
 
-trigger: none   # CI disabled; PR-only validation
+trigger: none       # PR-only
 pr:
   branches:
-    include:
-      - '*'     # validate all PRs into any target branch (set path/branch filters via policy if needed)
+    include: ['*']
   paths:
     include:
       - '**/*.tf'
       - '**/*.tftest.hcl'
       - '.tflint.hcl'
-      - '**/*.tfvars'
-      - 'modules/**'
-      - 'azure-pipelines.yml'
       - '.checkov.yaml'
       - 'requirements.txt'
-      - 'poetry.lock'
+      - 'azure-pipelines.yml'
 
 variables:
   TF_WORKING_DIR: '.'
-  TFLINT_PLUGIN_DIR: '$(Pipeline.Workspace)/.tflint.d'
   TERRAFORM_PLUGIN_CACHE_DIR: '$(Pipeline.Workspace)/.terraform.d/plugin-cache'
+  TFLINT_PLUGIN_DIR: '$(Pipeline.Workspace)/.tflint.d'
   PYTHON_CACHE_DIR: '$(Pipeline.Workspace)/.pip-cache'
   TF_VERSION_1: '1.6.6'
   TF_VERSION_2: '1.9.5'
@@ -268,10 +265,10 @@ pool:
 
 stages:
 - stage: LintAndTest
-  displayName: PR Lints and terraform test
+  displayName: Lint & Test (PR)
   jobs:
-  - job: lint_and_test
-    displayName: Lint + Test (matrix)
+  - job: lint_test
+    displayName: Run lints and terraform test (matrix)
     strategy:
       matrix:
         tf_1_6:
@@ -284,88 +281,100 @@ stages:
       fetchDepth: 0
 
     - bash: |
-        set -euo pipefail
         mkdir -p "$(TERRAFORM_PLUGIN_CACHE_DIR)" "$(TFLINT_PLUGIN_DIR)" "$(PYTHON_CACHE_DIR)"
       displayName: Prepare cache dirs
 
     - task: Cache@2
+      displayName: Cache Terraform providers
       inputs:
         key: 'terraform|$(Agent.OS)|$(TF_VERSION)|$(Build.SourcesDirectory)/$(TF_WORKING_DIR)/terraform.lock.hcl'
         restoreKeys: |
           terraform|$(Agent.OS)|$(TF_VERSION)
           terraform|$(Agent.OS)
         path: '$(TERRAFORM_PLUGIN_CACHE_DIR)'
-      displayName: Cache Terraform providers
 
     - task: Cache@2
+      displayName: Cache TFLint plugins
       inputs:
         key: 'tflint|$(Agent.OS)|$(TF_VERSION)|$(Build.SourcesDirectory)/.tflint.hcl'
         restoreKeys: |
           tflint|$(Agent.OS)|$(TF_VERSION)
           tflint|$(Agent.OS)
         path: '$(TFLINT_PLUGIN_DIR)'
-      displayName: Cache TFLint plugins
 
     - task: Cache@2
+      displayName: Cache pip (Checkov)
       inputs:
         key: 'pip|$(Agent.OS)|$(TF_VERSION)|$(Build.SourcesDirectory)/requirements.txt'
         restoreKeys: |
           pip|$(Agent.OS)|$(TF_VERSION)
           pip|$(Agent.OS)
         path: '$(PYTHON_CACHE_DIR)'
-      displayName: Cache pip (Checkov)
 
+    # ---- Microsoft DevLabs Terraform tasks ----
+    - task: TerraformInstaller@1
+      displayName: Install Terraform $(TF_VERSION)
+      inputs:
+        terraformVersion: '$(TF_VERSION)'
+      # Extension: "Terraform" by Microsoft DevLabs (ms-devlabs)
+
+    # fmt -check via 'custom' command (backend not needed)
+    - task: TerraformTask@5
+      displayName: terraform fmt -check -recursive
+      inputs:
+        provider: 'azurerm'
+        command: 'custom'
+        workingDirectory: '$(TF_WORKING_DIR)'
+        customCommand: 'fmt -check -recursive'
+
+    # init without backend to only fetch providers & validate module
+    - task: TerraformTask@5
+      displayName: terraform init (no backend)
+      env:
+        TF_PLUGIN_CACHE_DIR: '$(TERRAFORM_PLUGIN_CACHE_DIR)'
+      inputs:
+        provider: 'azurerm'
+        command: 'custom'
+        workingDirectory: '$(TF_WORKING_DIR)'
+        customCommand: 'init -backend=false -upgrade'
+
+    - task: TerraformTask@5
+      displayName: terraform validate
+      inputs:
+        provider: 'azurerm'
+        command: 'validate'
+        workingDirectory: '$(TF_WORKING_DIR)'
+
+    # ---- TFLint (no Microsoft task exists) ----
     - bash: |
         set -euo pipefail
-        # Terraform
-        curl -sSLo /tmp/terraform.zip "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip"
-        sudo unzip -o /tmp/terraform.zip -d /usr/local/bin
-        terraform -version
-        # TFLint (latest)
-        TFLINT_VERSION="$(curl -sSL https://api.github.com/repos/terraform-linters/tflint/releases/latest | grep -Po '"tag_name":\s*"\K[^"]+')"
-        curl -sSLo /tmp/tflint.zip "https://github.com/terraform-linters/tflint/releases/download/${TFLINT_VERSION}/tflint_linux_amd64.zip"
-        sudo unzip -o /tmp/tflint.zip -d /usr/local/bin
-        tflint --version
-        # Checkov
-        python3 -m pip install --upgrade pip --cache-dir "$(PYTHON_CACHE_DIR)"
-        python3 -m pip install checkov --cache-dir "$(PYTHON_CACHE_DIR)"
-        checkov -v
-      displayName: Install Terraform, TFLint, Checkov
-
-    - bash: |
-        set -euo pipefail
-        cd "$(TF_WORKING_DIR)"
-        terraform fmt -check -recursive
-      displayName: terraform fmt (check)
-
-    - bash: |
-        set -euo pipefail
-        cd "$(TF_WORKING_DIR)"
-        export TF_PLUGIN_CACHE_DIR="$(TERRAFORM_PLUGIN_CACHE_DIR)"
-        terraform init -backend=false -upgrade
-        terraform validate
-      displayName: terraform init & validate
-
-    - bash: |
-        set -euo pipefail
-        cd "$(TF_WORKING_DIR)"
         export TFLINT_PLUGIN_DIR="$(TFLINT_PLUGIN_DIR)"
+        curl -sSL https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
         tflint --init
-        # Fail on any ERROR-level findings
         tflint --format=compact
       displayName: tflint
 
-    - bash: |
-        set -euo pipefail
-        cd "$(TF_WORKING_DIR)"
-        # Use .checkov.yaml if present
-        checkov -d . --quiet
-      displayName: checkov
+    # ---- Checkov using Microsoft Python task ----
+    - task: UsePythonVersion@0
+      displayName: Use Python 3.x
+      inputs:
+        versionSpec: '3.x'
 
     - bash: |
-        set -euo pipefail
-        cd "$(TF_WORKING_DIR)"
-        export TF_PLUGIN_CACHE_DIR="$(TERRAFORM_PLUGIN_CACHE_DIR)"
-        terraform test -no-color
+        python -m pip install --upgrade pip --cache-dir "$(PYTHON_CACHE_DIR)"
+        # Respect repo .checkov.yaml automatically if present
+        python -m pip install checkov --cache-dir "$(PYTHON_CACHE_DIR)"
+        checkov -d '$(TF_WORKING_DIR)' --quiet
+      displayName: checkov
+
+    # ---- terraform test via Terraform task ----
+    - task: TerraformTask@5
       displayName: terraform test
+      env:
+        TF_PLUGIN_CACHE_DIR: '$(TERRAFORM_PLUGIN_CACHE_DIR)'
+      inputs:
+        provider: 'azurerm'
+        command: 'custom'
+        workingDirectory: '$(TF_WORKING_DIR)'
+        customCommand: 'test -no-color'
 
