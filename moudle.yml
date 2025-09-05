@@ -1,0 +1,157 @@
+# Run this pipeline on every commit pushed to any PR whose target branch is main
+trigger: none
+pr:
+  branches:
+    include: [ main ]
+
+variables:
+  # --- Terraform/module ---
+  TF_VERSION: '1.9.5'
+  MODULE_DIR: 'modules/my-module'                  # <- change this
+  TF_CACHE_DIR: '$(Pipeline.Workspace)/tfplugincache'
+
+  # --- Security & lint tooling versions (pin for repeatability) ---
+  TFLINT_VERSION: '0.51.1'
+  CHECKOV_VERSION: '3.2.341'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+- checkout: self
+  clean: true
+
+# ----------------------------
+# Terraform CLI (exact version)
+# ----------------------------
+- task: TerraformInstaller@1
+  displayName: 'Install Terraform $(TF_VERSION)'
+  inputs:
+    terraformVersion: '$(TF_VERSION)'
+
+# -------------------------------------------------------
+# Cache provider plugins WITHOUT a lockfile (module CI)
+# Key off OS + TF version + provider constraints file
+# -------------------------------------------------------
+- task: Cache@2
+  displayName: 'Cache Terraform provider plugins'
+  inputs:
+    key: |
+      tfmod | $(Agent.OS) | $(TF_VERSION) |
+      "$(Build.SourcesDirectory)/$(MODULE_DIR)/versions.tf"
+    path: '$(TF_CACHE_DIR)'
+    restoreKeys: |
+      tfmod | $(Agent.OS) | $(TF_VERSION)
+      tfmod | $(Agent.OS)
+- script: mkdir -p "$(TF_CACHE_DIR)"
+  displayName: 'Ensure TF plugin cache dir exists'
+
+# -------------------------------------------------------
+# Terraform init/validate for a module (no backend)
+# -------------------------------------------------------
+- task: TerraformTaskV5@5
+  displayName: 'terraform init (module, no backend)'
+  inputs:
+    provider: 'azurerm'                             # harmless if your module is provider-agnostic
+    command: 'init'
+    workingDirectory: '$(Build.SourcesDirectory)/$(MODULE_DIR)'
+    backendType: 'none'
+    commandOptions: '-upgrade -input=false'
+  env:
+    TF_PLUGIN_CACHE_DIR: '$(TF_CACHE_DIR)'
+
+- task: TerraformTaskV5@5
+  displayName: 'terraform fmt -check (recursive)'
+  inputs:
+    provider: 'azurerm'
+    command: 'custom'
+    workingDirectory: '$(Build.SourcesDirectory)/$(MODULE_DIR)'
+    customCommand: 'fmt -check -recursive -no-color'
+  env:
+    TF_PLUGIN_CACHE_DIR: '$(TF_CACHE_DIR)'
+
+- task: TerraformTaskV5@5
+  displayName: 'terraform validate (module)'
+  inputs:
+    provider: 'azurerm'
+    command: 'validate'
+    workingDirectory: '$(Build.SourcesDirectory)/$(MODULE_DIR)'
+  env:
+    TF_PLUGIN_CACHE_DIR: '$(TF_CACHE_DIR)'
+
+# ===========================
+# TFLint (with caching)
+# ===========================
+# Cache the TFLint install directory between runs
+- task: Cache@2
+  displayName: 'Cache TFLint binary'
+  inputs:
+    key: 'tflint | $(Agent.OS) | $(TFLINT_VERSION)'
+    path: '$(Pipeline.Workspace)/tools/tflint'
+- script: |
+    set -e
+    mkdir -p "$(Pipeline.Workspace)/tools/tflint/bin"
+    if [ ! -x "$(Pipeline.Workspace)/tools/tflint/bin/tflint" ]; then
+      curl -sSL -o /tmp/tflint.tar.gz \
+        "https://github.com/terraform-linters/tflint/releases/download/v$(TFLINT_VERSION)/tflint_linux_amd64.zip"
+      unzip -o /tmp/tflint.tar.gz -d "$(Pipeline.Workspace)/tools/tflint/bin"
+      chmod +x "$(Pipeline.Workspace)/tools/tflint/bin/tflint"
+    fi
+    echo "##vso[task.prependpath]$(Pipeline.Workspace)/tools/tflint/bin"
+  displayName: 'Install TFLint if cache miss'
+
+# Optional: initialize TFLint plugins (respects .tflint.hcl if present)
+- script: |
+    tflint --init
+  workingDirectory: '$(Build.SourcesDirectory)/$(MODULE_DIR)'
+  displayName: 'TFLint init'
+
+- script: |
+    tflint -f sarif . > "$(Build.SourcesDirectory)/$(MODULE_DIR)/tflint.sarif"
+    tflint -f compact . || true
+  workingDirectory: '$(Build.SourcesDirectory)/$(MODULE_DIR)'
+  displayName: 'TFLint scan (outputs SARIF)'
+  continueOnError: true
+
+# Publish TFLint SARIF artifact
+- publish: '$(Build.SourcesDirectory)/$(MODULE_DIR)/tflint.sarif'
+  artifact: tflint-sarif
+
+# ===========================
+# Checkov (with pip caching)
+# ===========================
+# Cache pip wheel/downloads to speed up Checkov installs
+- task: Cache@2
+  displayName: 'Cache pip'
+  inputs:
+    key: 'pip | $(Agent.OS) | $(CHECKOV_VERSION)'
+    path: '$(Pipeline.Workspace)/.pip-cache'
+- script: |
+    python3 -m pip install --upgrade pip
+    python3 -m pip install --cache-dir "$(Pipeline.Workspace)/.pip-cache" --user "checkov==$(CHECKOV_VERSION)"
+    echo "##vso[task.prependpath]$HOME/.local/bin"
+  displayName: 'Install Checkov (pinned)'
+
+- script: |
+    checkov -d . \
+      --framework terraform \
+      --quiet \
+      -o sarif > checkov.sarif || true
+    # Also emit a summary table in the log
+    checkov -d . --framework terraform --compact || true
+  workingDirectory: '$(Build.SourcesDirectory)/$(MODULE_DIR)'
+  displayName: 'Checkov scan (outputs SARIF)'
+  continueOnError: true
+
+# Publish Checkov SARIF artifact
+- publish: '$(Build.SourcesDirectory)/$(MODULE_DIR)/checkov.sarif'
+  artifact: checkov-sarif
+
+# ----------------------------
+# (Optional) Fail the build on findings thresholds
+# ----------------------------
+# Uncomment and tune if you want to gate merges on severity.
+# - script: |
+#     checkov -d . --framework terraform --soft-fail-on HIGH --soft-fail-on MEDIUM
+#   workingDirectory: '$(Build.SourcesDirectory)/$(MODULE_DIR)'
+#   displayName: 'Enforce policy thresholds'
